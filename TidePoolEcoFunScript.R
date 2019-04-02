@@ -5,6 +5,8 @@
 library(tidyverse)
 library(janitor)
 library(ggfortify)
+library(vegan)
+library(lubridate)
 
 ### Read in data from github repo ####
 
@@ -14,6 +16,10 @@ ChemData<-read.csv(urlfile)
 #clean the headers
 ChemData<-clean_names(ChemData)
 
+# Physical data
+physurl<-"https://raw.githubusercontent.com/njsilbiger/Biophysical_feedbacks_in_coastal_ecosystems/master/Data/CleanData/PhysicalAndPercentCoverData.csv"
+physical_data<-read.csv(physurl)
+physical_data<-clean_names(physical_data)
 
 # community composition data
 #Mobile counts
@@ -104,7 +110,10 @@ CoverbyGroups$pool_id<-Mobile$Pool
 CoverbyGroups<-CoverbyGroups[,c(1,11,2:10)]
 
 
-### Calculate the difference beterrn pools and ocean for all timepoints of the chemistry data
+### Calculate the difference between pools and ocean for all timepoints of the chemistry data
+
+# convert sampling time to hms
+ChemData$sampling_time<-mdy_hms(paste(as.character(ChemData$sampling_date),as.character(ChemData$sampling_time)))
 
 # pull out all the ocean time points
 Ocean<-ChemData[which(ChemData$pool_id=='Ocean'),]
@@ -165,12 +174,43 @@ ggplot(chem_pca$x)+
 
 
 ## Calculate change over time within each tide pool without accounting for the ocean
-ChemData %>%
+Nut_diff<-ChemData %>%
+  filter(pool_id!='Ocean')%>%
+  mutate(pool_id = as.numeric(pool_id))%>% 
+  arrange(site, day_night,pool_id,time_point ) %>% # re-order the data so that I can calculate differences between timepoints
   group_by(site, pool_id, day_night) %>%
-  arrange(day_night,time_point, site, pool_id) %>%
-  mutate(diff = nn_umol_l - lag(nn_umol_l, default = first(nn_umol_l)))%>%
-  View()
+  mutate(diff_nn = nn_umol_l - lag(nn_umol_l, default = first(nn_umol_l)),
+         diff_nH4 = nh4_umol_l - lag(nh4_umol_l, default = first(nh4_umol_l)),
+         diff_PO = po_umol_l - lag(po_umol_l, default = first(po_umol_l)),
+         diff_pCO2 = p_co2_uatm - lag(po_umol_l, default = first(p_co2_uatm)),
+         diff_DO = do_mg_l - lag(do_mg_l, default = first(do_mg_l)),
+         diff_Temp = temp_in_the_pool - lag(temp_in_the_pool, default = first(temp_in_the_pool)),
+         timediff = sampling_time - lag(sampling_time, default = first(sampling_time))
+         )%>% # calculate differences between the timepoints
+  select(site, day_night,pool_id,time_point, diff_nn,diff_nH4,diff_PO, diff_pCO2, diff_DO,diff_Temp, timediff )
+
+
+# join the difference data with the physical data to calculate uptake rates 
+Nut_diff<-left_join(Nut_diff, physical_data)
+
+rate<-function(x,vol,time,SA){
+  vol = vol/1000 # convert ml to L
+  time = time/3600 # convert time from seconds to hours
+  1000*(x*vol)/(SA*time) # mmol m-2 hr-1
+}
+
+Nut_rates<-Nut_diff %>%
+  mutate_at(vars(starts_with("diff"),-"diff_Temp"), funs(rate(.,volume_cm3, as.numeric(timediff), surface_area_m2))) %>%
+  drop_na
+
+# calculate averages by day and night 
+Nut_rates_sum<-Nut_rates %>%
+  group_by(site, day_night, pool_id) %>%
+  summarise_at(.vars = 5:24, .funs = mean)
+
 ## CCA analysis with species and chemistry
 
-var.cca<-cca(Chem_Comm[,24:31], Chem_Comm[,3:23])
+var.cca<-cca(Nut_rates_sum[Nut_rates_sum$day_night=='Day',4:9], Nut_rates_sum[Nut_rates_sum$day_night=='Day',18:23])
+var.cca<-cca(Nut_rates_sum[Nut_rates_sum$day_night=='Night',4:9], Nut_rates_sum[Nut_rates_sum$day_night=='Night',18:23])
+
 mod<-lmer(chem_pca$x[,1]~Chem_Comm$ProducerDom+(1|Chem_Comm$site))
