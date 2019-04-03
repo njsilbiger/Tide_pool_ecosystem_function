@@ -7,6 +7,8 @@ library(janitor)
 library(ggfortify)
 library(vegan)
 library(lubridate)
+library(lme4)
+library(lmerTest)
 
 ### Read in data from github repo ####
 
@@ -190,8 +192,27 @@ Nut_diff<-ChemData %>%
   select(site, day_night,pool_id,time_point, diff_nn,diff_nH4,diff_PO, diff_pCO2, diff_DO,diff_Temp, timediff )
 
 
+# add producer dominance to the physical data
+physical_data$ProdDom<-physical_data$fleshy_algae+physical_data$surf_grass- physical_data$inverts
+
+# calculate functional richness
+PercentTotal<-cbind(MobileCover[,1:2],PercentTotal)
+PercentTotal$TotalRichness<- rowSums(ifelse(PercentTotal[,5:63]>0,1,0))
+PercentTotal$AlgalRichness <- rowSums(ifelse(PercentTotal[,5:38]>0,1,0))
+PercentTotal$AnimalRichness<- rowSums(ifelse(PercentTotal[,39:63]>0,1,0))
+PercentTotal$TotalDiversity<-diversity(PercentTotal[,5:63], index = "shannon", MARGIN = 1, base = exp(1))
+PercentTotal$AlgalDiversity<-diversity(PercentTotal[,5:38], index = "shannon", MARGIN = 1, base = exp(1))
+PercentTotal$AnimalDiversity<-diversity(PercentTotal[,39:63], index = "shannon", MARGIN = 1, base = exp(1))
+
 # join the difference data with the physical data to calculate uptake rates 
 Nut_diff<-left_join(Nut_diff, physical_data)
+
+Richness<-PercentTotal %>%
+  select(Site, Pool,ends_with('Richness'),ends_with('Diversity') ) %>%
+  rename(pool_id = 'Pool', site = "Site")
+
+# join in the richness data
+Nut_diff<-left_join(Nut_diff, Richness)
 
 rate<-function(x,vol,time,SA){
   vol = vol/1000 # convert ml to L
@@ -206,10 +227,100 @@ Nut_rates<-Nut_diff %>%
 # calculate averages by day and night 
 Nut_rates_sum<-Nut_rates %>%
   group_by(site, day_night, pool_id) %>%
-  summarise_at(.vars = 5:24, .funs = mean)
+  summarise_at(.vars = 5:31, .funs = mean)
+
+# make a plot of every combination for total richness
+Nut_rates_sum %>%
+  select(site, day_night, starts_with('dif'), ends_with('Richness'))%>%
+  gather(-c(ends_with('Richness'), site, day_night), key = "var", value = "value") %>%
+  ggplot(aes(x = TotalRichness, y = value)) +
+  geom_point() +
+  stat_smooth() +
+  facet_wrap(~ var+day_night, scales = "free") +
+  theme_bw()
+
+# algal richness
+Nut_rates_sum %>%
+  select(site, day_night, starts_with('dif'), ends_with('Richness'))%>%
+  gather(-c(ends_with('Richness'), site, day_night), key = "var", value = "value") %>%
+  ggplot(aes(x = AlgalRichness, y = value)) +
+  geom_point() +
+  stat_smooth() +
+  facet_wrap(~ var+day_night, scales = "free") +
+  theme_bw()
+
+# animal richness
+Nut_rates_sum %>%
+  select(site, day_night, starts_with('dif'), ends_with('Richness'))%>%
+  gather(-c(ends_with('Richness'), site, day_night), key = "var", value = "value") %>%
+  ggplot(aes(x = AnimalRichness, y = value)) +
+  geom_point() +
+  stat_smooth() +
+  facet_wrap(~ var+day_night, scales = "free") +
+  theme_bw()
+
+# producer dominance
+Nut_rates_sum %>%
+  select(site, day_night, starts_with('dif'), ProdDom)%>%
+  gather(-c(ends_with('Richness'), site, day_night, ProdDom), key = "var", value = "value") %>%
+  ggplot(aes(x = ProdDom, y = value)) +
+  geom_point() +
+  stat_smooth() +
+  facet_wrap(~ var+day_night, scales = "free") +
+  theme_bw()
+
+# Total Diversity
+Nut_rates_sum %>%
+  select(site, day_night, starts_with('dif'), ends_with('Diversity'))%>%
+  gather(-c(ends_with('Diversity'), site, day_night), key = "var", value = "value") %>%
+  ggplot(aes(x = TotalDiversity, y = value)) +
+  geom_point() +
+  stat_smooth() +
+  facet_wrap(~ var+day_night, scales = "free") +
+  theme_bw()
+
+# Algal Diversity
+Nut_rates_sum %>%
+  select(site, day_night, starts_with('dif'), ends_with('Diversity'))%>%
+  gather(-c(ends_with('Diversity'), site, day_night), key = "var", value = "value") %>%
+  ggplot(aes(x = AlgalDiversity, y = value)) +
+  geom_point() +
+  stat_smooth() +
+  facet_wrap(~ var+day_night, scales = "free") +
+  theme_bw()
+
+# Animal Diversity
+Nut_rates_sum %>%
+  select(site, day_night, starts_with('dif'), ends_with('Diversity'))%>%
+  gather(-c(ends_with('Diversity'), site, day_night), key = "var", value = "value") %>%
+  ggplot(aes(x = AnimalDiversity, y = value)) +
+  geom_point() +
+  stat_smooth() +
+  facet_wrap(~ var+day_night, scales = "free") +
+  theme_bw()
+
+# invert cover
+Nut_rates_sum %>%
+  select(site, day_night, starts_with('dif'), inverts)%>%
+  gather(-c(inverts, site, day_night), key = "var", value = "value") %>%
+  ggplot(aes(x = inverts, y = value)) +
+  geom_point() +
+  stat_smooth() +
+  facet_wrap(~ var+day_night, scales = "free") +
+  theme_bw()
+
+# macrophyte cover
+Nut_rates_sum %>%
+  select(site, day_night, starts_with('dif'), fleshy_algae, surf_grass)%>%
+  gather(-c(fleshy_algae, surf_grass, site, day_night), key = "var", value = "value") %>%
+  ggplot(aes(x = fleshy_algae+ surf_grass, y = value)) +
+  geom_point() +
+  stat_smooth() +
+  facet_wrap(~ var+day_night, scales = "free") +
+  theme_bw()
+
 
 ## CCA analysis with species and chemistry
-
 var.cca<-cca(Nut_rates_sum[Nut_rates_sum$day_night=='Day',4:9], Nut_rates_sum[Nut_rates_sum$day_night=='Day',18:23])
 var.cca<-cca(Nut_rates_sum[Nut_rates_sum$day_night=='Night',4:9], Nut_rates_sum[Nut_rates_sum$day_night=='Night',18:23])
 
